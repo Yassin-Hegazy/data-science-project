@@ -2,13 +2,13 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import os
+from scipy.stats import chi2_contingency, ttest_ind
 from sklearn.feature_selection import chi2
 from sklearn.preprocessing import LabelEncoder
 from sklearn.preprocessing import StandardScaler
 from sklearn.utils import resample
 
-# 1. Load the dataset
-# Make sure the filename matches exactly what is in your folder
+
 df = pd.read_csv('online_shoppers_intention.csv')
 
 # Part 1 a) Display the first and last 12 rows 
@@ -252,6 +252,11 @@ print(class_percentage_before.round(2))
 print("\nPercentage after sampling:")
 print(class_percentage_after.round(2))
 
+
+
+
+
+
 # Part 3: Data Visualization
 print("\n=== Part 3: Data Visualization ===")
 
@@ -338,4 +343,136 @@ print(
 print(
     "Interpretation 2: BounceRates and ExitRates also have a strong positive correlation, "
     "which indicates that sessions with early bounces often also end with high exit behavior."
+)
+
+##################################################
+# Part 4: Insight Discovery
+##################################################
+
+print("\n=== Part 4: Insight Discovery ===")
+
+# 4a) Sessions that ended in a purchase generated far higher PageValues than non-purchasing sessions.
+# This is the strongest target-related insight in the dataset because the average PageValues for
+# Revenue=True sessions is 27.26 versus only 2.00 for Revenue=False sessions, and the difference
+# is statistically significant with a Welch t-test p-value of 1.88e-173. The result suggests that
+# PageValues captures meaningful purchase intent rather than random browsing noise. In practical
+# terms, users who accumulate page value during the session are much more likely to convert.
+print("\n--- 4a) Statistically Supported Insight About the Target ---")
+pagevalues_true = df[df['Revenue'] == True]['PageValues']
+pagevalues_false = df[df['Revenue'] == False]['PageValues']
+pagevalues_ttest = ttest_ind(pagevalues_true, pagevalues_false, equal_var=False)
+
+print(f"Average PageValues when Revenue = True: {pagevalues_true.mean():.2f}")
+print(f"Average PageValues when Revenue = False: {pagevalues_false.mean():.2f}")
+print(f"Welch t-test p-value: {pagevalues_ttest.pvalue:.3e}")
+print(
+    "Insight: Purchasing sessions have dramatically higher PageValues, so PageValues is strongly "
+    "associated with the target variable."
+)
+
+plt.figure(figsize=(8, 5))
+plt.boxplot(
+    [pagevalues_false, pagevalues_true],
+    tick_labels=['Revenue=False', 'Revenue=True'],
+    patch_artist=True,
+    boxprops=dict(facecolor='lightblue'),
+)
+plt.title('PageValues by Revenue Outcome')
+plt.ylabel('PageValues')
+insight_plot_path = os.path.join(visualization_dir, '4a_pagevalues_by_revenue.png')
+plt.tight_layout()
+plt.savefig(insight_plot_path)
+plt.close()
+print(f"Supporting visualization saved to: {insight_plot_path}")
+
+# 4b) The interaction between VisitorType and Month reveals that new visitors convert especially well in November.
+# The highest conversion segment is New_Visitor in November with a conversion rate of 30.55%, while the
+# overall conversion rate in the cleaned dataset is only 15.63%. This matters because the effect is not
+# explained by month alone or visitor type alone; it appears when both features are considered together.
+# The pattern suggests that seasonal shopping periods attract high-intent first-time visitors.
+print("\n--- 4b) Interaction-Based Insight ---")
+visitor_month_conversion = (
+    df.groupby(['VisitorType', 'Month'])['Revenue']
+    .mean()
+    .sort_values(ascending=False)
+)
+top_segment = visitor_month_conversion.index[0]
+top_conversion_rate = visitor_month_conversion.iloc[0]
+overall_conversion_rate = df['Revenue'].mean()
+
+print(
+    f"Top interaction segment: VisitorType = {top_segment[0]}, Month = {top_segment[1]}"
+)
+print(f"Conversion rate for this segment: {top_conversion_rate:.2%}")
+print(f"Overall conversion rate: {overall_conversion_rate:.2%}")
+print(
+    "Insight: First-time visitors in November convert at a much higher rate than the dataset average, "
+    "which shows a meaningful interaction between seasonality and visitor type."
+)
+
+# 4c) A counter-intuitive result is that SpecialDay is lower for purchasing sessions than for non-purchasing sessions.
+# One might expect buying behavior to rise near special shopping days, yet the average SpecialDay score is
+# 0.023 for Revenue=True sessions and 0.069 for Revenue=False sessions. The Welch t-test p-value is 1.47e-38,
+# so the difference is statistically strong. This suggests that regular browsing behavior outside special-day
+# periods may produce better conversions than sessions clustered near special-event dates.
+print("\n--- 4c) Counter-Intuitive Finding ---")
+specialday_true = df[df['Revenue'] == True]['SpecialDay']
+specialday_false = df[df['Revenue'] == False]['SpecialDay']
+specialday_ttest = ttest_ind(specialday_true, specialday_false, equal_var=False)
+
+print(f"Average SpecialDay when Revenue = True: {specialday_true.mean():.4f}")
+print(f"Average SpecialDay when Revenue = False: {specialday_false.mean():.4f}")
+print(f"Welch t-test p-value: {specialday_ttest.pvalue:.3e}")
+print(
+    "Insight: Purchases are less associated with SpecialDay periods than non-purchases, which is an "
+    "unexpected pattern in this dataset."
+)
+
+# 4d) A practical business recommendation is to prioritize campaigns that raise PageValues and target high-intent seasonal segments.
+# The data shows that PageValues is much higher in purchasing sessions, and New_Visitor traffic in November
+# converts at 30.55%, nearly double the overall conversion rate of 15.63%. A business should therefore
+# emphasize stronger product-page value, clearer offers, and acquisition campaigns for new visitors during
+# high-conversion months. This recommendation is evidence-based because it combines target strength and
+# feature interaction into one actionable strategy.
+print("\n--- 4d) Business Recommendation ---")
+visitortype_revenue_table = pd.crosstab(df['VisitorType'], df['Revenue'])
+visitortype_chi2 = chi2_contingency(visitortype_revenue_table)
+
+print(f"New_Visitor conversion rate in November: {top_conversion_rate:.2%}")
+print(f"Overall conversion rate: {overall_conversion_rate:.2%}")
+print(f"VisitorType vs Revenue chi-square p-value: {visitortype_chi2[1]:.3e}")
+print(
+    "Recommendation: Focus acquisition and remarketing efforts on new visitors during November-like "
+    "high-conversion periods, and optimize product pages to increase PageValues before checkout."
+)
+
+##################################################
+# Part 5: Feature Engineering
+##################################################
+
+print("\n=== Part 5: Feature Engineering ===")
+
+# 5a) Create a new behavioral feature that measures the average time spent per product-related page.
+# This summarizes browsing depth and browsing time into one variable, which can be more informative
+# than using only raw counts or only total duration.
+print("\n--- 5a) New Feature Creation ---")
+df_filtered['Avg_Product_Time'] = (
+    df_filtered['ProductRelated_Duration'] / df_filtered['ProductRelated']
+)
+
+print("New feature created: Avg_Product_Time")
+print("Definition: ProductRelated_Duration / ProductRelated")
+print("First 10 values:")
+print(df_filtered['Avg_Product_Time'].head(10))
+
+# 5b) Explain why the engineered feature may help future classification models.
+# Users may open a similar number of product pages but behave very differently in terms of time spent.
+# This feature captures engagement quality, which can improve a classifier's ability to separate casual
+# browsing from genuine purchase intent.
+print("\n--- 5b) Why This Feature May Improve Classification ---")
+print(
+    "Avg_Product_Time may improve future classification models because it captures how much time a user "
+    "spends on each product page on average. Two visitors can view the same number of product pages, "
+    "but the visitor who spends longer on each page may show stronger purchase intent. This makes the "
+    "feature useful for distinguishing shallow browsing from engaged shopping behavior."
 )
