@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import os
 from sklearn.feature_selection import chi2
 from sklearn.preprocessing import LabelEncoder
 from sklearn.preprocessing import StandardScaler
@@ -250,3 +251,91 @@ print("\nPercentage before sampling:")
 print(class_percentage_before.round(2))
 print("\nPercentage after sampling:")
 print(class_percentage_after.round(2))
+
+# Part 3: Data Visualization
+print("\n=== Part 3: Data Visualization ===")
+
+# Create an output folder for the generated charts so they can be reviewed after the script finishes.
+visualization_dir = "visualizations"
+os.makedirs(visualization_dir, exist_ok=True)
+
+# 3a) Histogram for a relevant numerical feature
+# PageValues is a useful feature because it reflects how much value a session generated before purchase or exit.
+print("\n--- 3a) Histogram: PageValues ---")
+plt.figure(figsize=(8, 5))
+plt.hist(df['PageValues'], bins=30, color='steelblue', edgecolor='black')
+plt.title('Histogram of PageValues')
+plt.xlabel('PageValues')
+plt.ylabel('Frequency')
+histogram_path = os.path.join(visualization_dir, '3a_histogram_pagevalues.png')
+plt.tight_layout()
+plt.savefig(histogram_path)
+plt.close()
+
+print(f"Histogram saved to: {histogram_path}")
+print(
+    "Interpretation: The distribution is heavily right-skewed, which means most sessions "
+    "have low PageValues while a smaller number of sessions have very high values."
+)
+
+# 3b) Boxplot for a significant feature
+# ProductRelated_Duration is significant because time spent on product pages is closely tied to shopping intent.
+print("\n--- 3b) Boxplot: ProductRelated_Duration ---")
+plt.figure(figsize=(8, 5))
+plt.boxplot(df['ProductRelated_Duration'], vert=True, patch_artist=True, boxprops=dict(facecolor='lightgreen'))
+plt.title('Boxplot of ProductRelated_Duration')
+plt.ylabel('ProductRelated_Duration')
+boxplot_path = os.path.join(visualization_dir, '3b_boxplot_productrelated_duration.png')
+plt.tight_layout()
+plt.savefig(boxplot_path)
+plt.close()
+
+print(f"Boxplot saved to: {boxplot_path}")
+print(
+    "Interpretation: This feature shows many high-value outliers, which justifies its choice "
+    "because shopping-session duration varies strongly between casual visitors and engaged buyers."
+)
+
+# 3c) Scatterplot between two meaningful features
+# ProductRelated and ProductRelated_Duration are paired behavioral features that describe browsing depth and time spent.
+print("\n--- 3c) Scatterplot: ProductRelated vs ProductRelated_Duration ---")
+plt.figure(figsize=(8, 5))
+plt.scatter(df['ProductRelated'], df['ProductRelated_Duration'], alpha=0.4, color='darkorange')
+plt.title('ProductRelated vs ProductRelated_Duration')
+plt.xlabel('ProductRelated')
+plt.ylabel('ProductRelated_Duration')
+scatterplot_path = os.path.join(visualization_dir, '3c_scatter_productrelated_vs_duration.png')
+plt.tight_layout()
+plt.savefig(scatterplot_path)
+plt.close()
+
+print(f"Scatterplot saved to: {scatterplot_path}")
+print(
+    "Interpretation: The scatterplot shows a clear positive relationship. As the number of "
+    "product-related pages increases, the total time spent on those pages also tends to increase."
+)
+
+# 3d) Correlation heatmap for the numerical features
+# A heatmap summarizes the strongest linear relationships and supports the feature-selection results from Part 2.
+print("\n--- 3d) Correlation Heatmap ---")
+heatmap_corr = df[numerical_cols_for_selection].corr()
+plt.figure(figsize=(12, 8))
+heatmap = plt.imshow(heatmap_corr, cmap='coolwarm', aspect='auto', vmin=-1, vmax=1)
+plt.colorbar(heatmap, fraction=0.046, pad=0.04)
+plt.xticks(range(len(numerical_cols_for_selection)), numerical_cols_for_selection, rotation=90)
+plt.yticks(range(len(numerical_cols_for_selection)), numerical_cols_for_selection)
+plt.title('Correlation Heatmap of Numerical Features')
+heatmap_path = os.path.join(visualization_dir, '3d_correlation_heatmap.png')
+plt.tight_layout()
+plt.savefig(heatmap_path)
+plt.close()
+
+print(f"Heatmap saved to: {heatmap_path}")
+print(
+    "Interpretation 1: ProductRelated and ProductRelated_Duration have a strong positive correlation, "
+    "showing that users who open more product pages usually spend more time on them."
+)
+print(
+    "Interpretation 2: BounceRates and ExitRates also have a strong positive correlation, "
+    "which indicates that sessions with early bounces often also end with high exit behavior."
+)
