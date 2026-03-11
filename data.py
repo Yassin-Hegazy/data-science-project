@@ -123,7 +123,7 @@ print("This dataset has no missing values, so no imputation step was required.")
 # When two numerical columns are very strongly correlated, keeping both can add redundancy without improving the analysis.
 print("\n--- 2f) Correlation Analysis (Numerical Features) ---")
 numerical_cols_for_selection = df.select_dtypes(include=['int64', 'float64']).columns.tolist()
-correlation_matrix = df[numerical_cols_for_selection].corr().abs()
+correlation_matrix = df[numerical_cols_for_selection].corr(method='pearson').abs()
 upper_triangle = correlation_matrix.where(
     np.triu(np.ones(correlation_matrix.shape), k=1).astype(bool)
 )
@@ -323,7 +323,7 @@ print(
 # 3d) Correlation heatmap for the numerical features
 # A heatmap summarizes the strongest linear relationships and supports the feature-selection results from Part 2.
 print("\n--- 3d) Correlation Heatmap ---")
-heatmap_corr = df[numerical_cols_for_selection].corr()
+heatmap_corr = df[numerical_cols_for_selection].corr(method='pearson')
 plt.figure(figsize=(12, 8))
 heatmap = plt.imshow(heatmap_corr, cmap='coolwarm', aspect='auto', vmin=-1, vmax=1)
 plt.colorbar(heatmap, fraction=0.046, pad=0.04)
