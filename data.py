@@ -1,195 +1,252 @@
 import pandas as pd
-import numpy as np
 import matplotlib.pyplot as plt
 import os
 from scipy.stats import chi2_contingency, ttest_ind
-from sklearn.feature_selection import chi2
-from sklearn.preprocessing import LabelEncoder
 from sklearn.preprocessing import StandardScaler
-from sklearn.utils import resample
 
 
-df = pd.read_csv('online_shoppers_intention.csv')
+TARGET_COLUMN = 'Revenue'
+CATEGORICAL_FEATURE = 'VisitorType'
+ROWS_TO_DISPLAY = 12
+FILTER_COLUMN = 'ProductRelated'
+CORRELATION_THRESHOLD = 0.85
+MINIMUM_SEGMENT_SIZE = 100
+RANDOM_SEED = 42
+NUMERICAL_FEATURES = [
+    'Administrative',
+    'Administrative_Duration',
+    'Informational',
+    'Informational_Duration',
+    'ProductRelated',
+    'ProductRelated_Duration',
+    'BounceRates',
+    'ExitRates',
+    'PageValues',
+    'SpecialDay',
+]
+MULTI_CATEGORY_FEATURES = [
+    'Month',
+    'VisitorType',
+    'OperatingSystems',
+    'Browser',
+    'Region',
+    'TrafficType',
+]
+CATEGORICAL_FEATURES_FOR_SELECTION = MULTI_CATEGORY_FEATURES + ['Weekend']
+ENGINEERED_FEATURE = 'Avg_Product_Time'
 
-# Part 1 a) Display the first and last 12 rows 
-print("--- First 12 Rows ---")
-print(df.head(12))
+df_raw = pd.read_csv('online_shoppers_intention.csv')
+duplicates_count = df_raw.duplicated().sum()
+df = df_raw.drop_duplicates().reset_index(drop=True)
 
-print("\n--- Last 12 Rows ---")
-print(df.tail(12))
-# b) Identify and print the total number of rows and columns 
-print("\n--- 1b) Total Rows and Columns ---")
+print("--- First 12 Rows (Cleaned Dataset) ---")
+print(df.head(ROWS_TO_DISPLAY))
+
+print("\n--- Last 12 Rows (Cleaned Dataset) ---")
+print(df.tail(ROWS_TO_DISPLAY))
+
+print("\n--- 1b) Total Rows and Columns (Cleaned Dataset) ---")
 rows, cols = df.shape
 print(f"Total rows: {rows}")
 print(f"Total columns: {cols}")
 
-# c) List all column names and their corresponding data types 
 print("\n--- 1c) Column Names and Data Types ---")
 print(df.dtypes)
 
-# d) Generate a full dataset summary (non-null counts and data types) 
-print("\n--- 1d) Full Dataset Summary ---")
-df.info() # Note: info() automatically prints to the console
+print("\n--- 1d) Full Dataset Summary (Cleaned Dataset) ---")
+df.info()
 
-# e) Identify the target variable and analyze its class distribution 
-print("\n--- 1e) Target Variable Class Distribution ('Revenue') ---")
-print(df['Revenue'].value_counts(dropna=False))
+print(f"\n--- 1e) Target Variable Class Distribution ('{TARGET_COLUMN}') ---")
+target_distribution = df[TARGET_COLUMN].value_counts(dropna=False)
+target_total = len(df)
+target_percentage = target_distribution / target_total * 100
+print(target_distribution)
 print("\nPercentage distribution:")
-print(df['Revenue'].value_counts(normalize=True) * 100)
+print(target_percentage)
 
-# f) Select one categorical feature and display distinct/most frequent values 
-print("\n--- 1f) Categorical Feature Analysis ('VisitorType') ---")
+print(f"\n--- 1f) Categorical Feature Analysis ('{CATEGORICAL_FEATURE}') ---")
+distinct_values = df[CATEGORICAL_FEATURE].dropna().unique().tolist()
+distinct_values.sort()
+most_frequent_value = df[CATEGORICAL_FEATURE].mode(dropna=True)[0]
 print("Distinct values:")
-print(df['VisitorType'].unique())
-print(f"Most frequent value: {df['VisitorType'].mode()[0]}")
+print(distinct_values)
+print(f"Most frequent value: {most_frequent_value}")
 
-# g) Compute mean, median, standard dev, and percentiles (20%, 50%, 75%) 
 print("\n--- 1g) Numerical Features Statistics ---")
-# The describe method calculates mean, std, and we can specify exact percentiles (50% is the median)
-stats = df.describe(percentiles=[.20, .50, .75])
+mean_values = df[NUMERICAL_FEATURES].mean()
+median_values = df[NUMERICAL_FEATURES].median()
+std_values = df[NUMERICAL_FEATURES].std()
+percentile_20 = df[NUMERICAL_FEATURES].quantile(0.20)
+percentile_50 = df[NUMERICAL_FEATURES].quantile(0.50)
+percentile_75 = df[NUMERICAL_FEATURES].quantile(0.75)
+
+stats = pd.DataFrame()
+stats['mean'] = mean_values
+stats['median'] = median_values
+stats['std'] = std_values
+stats['20%'] = percentile_20
+stats['50%'] = percentile_50
+stats['75%'] = percentile_75
 print(stats)
 
-# h) Detect missing values and report their counts per column 
 print("\n--- 1h) Missing Values per Column ---")
-print(df.isnull().sum())
+print(df.isna().sum())
 
-# i) Identify duplicate records and remove them if found 
 print("\n--- 1i) Duplicate Records ---")
-duplicates_count = df.duplicated().sum()
-print(f"Number of duplicate records found: {duplicates_count}")
+print(f"Duplicate records found in raw dataset: {duplicates_count}")
+print(f"Dataset shape after duplicate removal: {df.shape}")
 
 if duplicates_count > 0:
-    df = df.drop_duplicates()
-    print(f"Duplicates removed. New dataset shape: {df.shape}")
+    print("Duplicates were removed before the Part 1 summaries above.")
 else:
-    print("No duplicates to remove.")
+    print("No duplicates were found, so no rows were removed.")
 
-# Part 2: Data Preparation
 print("\n=== Part 2: Data Preparation ===")
 
-# 2a) Meaningful filtering condition
-# We filter out sessions where the user visited 0 product-related pages.
-# Justification: If a user doesn't look at a single product, their purchasing intention is fundamentally zero. 
-# Removing these "instant bounce" or purely administrative visits helps our future models focus on actual shopper behavior.
+# Keep only sessions where the visitor actually viewed product pages.
 initial_shape = df.shape
-df_filtered = df[df['ProductRelated'] > 0].copy()
+df_filtered = df[df[FILTER_COLUMN] > 0].copy()
+missing_values_before_imputation = df_filtered.isna().sum()
+
+# If missing values ever appear, use median for numerical columns and mode for categorical columns.
+if missing_values_before_imputation[NUMERICAL_FEATURES].sum() > 0:
+    df_filtered[NUMERICAL_FEATURES] = df_filtered[NUMERICAL_FEATURES].fillna(
+        df_filtered[NUMERICAL_FEATURES].median()
+    )
+
+columns_that_use_mode = MULTI_CATEGORY_FEATURES.copy()
+columns_that_use_mode.append('Weekend')
+columns_that_use_mode.append(TARGET_COLUMN)
+
+for column in columns_that_use_mode:
+    if df_filtered[column].isna().any():
+        df_filtered[column] = df_filtered[column].fillna(
+            df_filtered[column].mode(dropna=True)[0]
+        )
+
+missing_values_after_imputation = df_filtered.isna().sum()
+
 print("\n--- 2a) Filtering ---")
 print(f"Removed {initial_shape[0] - df_filtered.shape[0]} rows where ProductRelated was 0.")
 print(f"New dataset shape: {df_filtered.shape}")
 
-# 2b) Encode categorical variables using an appropriate technique
 print("\n--- 2b) Encoding Categorical Variables ---")
-# We use Label Encoding for binary (True/False) targets so they become 1 and 0.
-le = LabelEncoder()
-df_filtered['Weekend'] = le.fit_transform(df_filtered['Weekend'])
-df_filtered['Revenue'] = le.fit_transform(df_filtered['Revenue'])
+df_prepared = df_filtered.copy()
 
-# We use One-Hot Encoding (pd.get_dummies) for multi-class categoricals to prevent the model 
-# from assuming false mathematical hierarchies (e.g., assuming Month 12 is "greater" than Month 1).
-# We drop the first column to avoid the dummy variable trap (perfect multicollinearity).
-categorical_cols = ['Month', 'VisitorType', 'OperatingSystems', 'Browser', 'Region', 'TrafficType']
-df_encoded = pd.get_dummies(df_filtered, columns=categorical_cols, drop_first=True)
+# Convert booleans to 0/1, then one-hot encode the multi-category columns.
+df_prepared['Weekend'] = df_prepared['Weekend'].astype(int)
+df_prepared[TARGET_COLUMN] = df_prepared[TARGET_COLUMN].astype(int)
+
+df_encoded = pd.get_dummies(
+    df_prepared,
+    columns=MULTI_CATEGORY_FEATURES,
+    drop_first=True,
+)
 print(f"Data shape after One-Hot Encoding: {df_encoded.shape}")
 
-# 2c) Normalize numerical features using StandardScaler
 print("\n--- 2c) Normalization ---")
-numerical_cols = ['Administrative', 'Administrative_Duration', 'Informational', 'Informational_Duration', 
-                  'ProductRelated', 'ProductRelated_Duration', 'BounceRates', 'ExitRates', 'PageValues', 'SpecialDay']
-
 scaler = StandardScaler()
-# StandardScaler shifts the distribution to have a mean of 0 and a standard deviation of 1.
-df_encoded[numerical_cols] = scaler.fit_transform(df_encoded[numerical_cols])
+df_encoded[NUMERICAL_FEATURES] = scaler.fit_transform(df_encoded[NUMERICAL_FEATURES])
 print("StandardScaler successfully applied to numerical features.")
 
-# 2d) Divide one numerical feature into 5 equal-width bins and report bin distribution
 print("\n--- 2d) Bin Distribution ---")
-# Using pd.cut to create 5 equal-width bins on the scaled 'ProductRelated' feature.
-df_encoded['ProductRelated_Binned'] = pd.cut(df_encoded['ProductRelated'], bins=5)
-print("Bin distribution for ProductRelated (Scaled):")
-print(df_encoded['ProductRelated_Binned'].value_counts().sort_index())
+product_related_bins = pd.cut(df_filtered['ProductRelated'], bins=5)
+print("Bin distribution for ProductRelated:")
+print(product_related_bins.value_counts().sort_index())
 
-# 2e) Identify and handle missing values
 print("\n--- 2e) Missing Values Handling ---")
-missing_values_after_preparation = df_filtered.isnull().sum()
-print("Missing values per column after filtering:")
-print(missing_values_after_preparation)
+print("Missing values per column before imputation:")
+print(missing_values_before_imputation)
 print(
     "\nMedian would be used for numerical columns and mode for categorical columns "
     "because median is robust to outliers while mode preserves the most common category."
 )
-print("This dataset has no missing values, so no imputation step was required.")
+if missing_values_before_imputation.sum() > 0:
+    print("\nMissing values per column after imputation:")
+    print(missing_values_after_imputation)
+    print("Median/mode imputation was applied before encoding and scaling.")
+else:
+    print("This dataset has no missing values, so no imputation step was required.")
 
-# 2f) Use correlation analysis to detect numerical features that carry nearly the same information.
-# When two numerical columns are very strongly correlated, keeping both can add redundancy without improving the analysis.
+# Remove redundant numerical features and weak categorical features.
 print("\n--- 2f) Correlation Analysis (Numerical Features) ---")
-numerical_cols_for_selection = df.select_dtypes(include=['int64', 'float64']).columns.tolist()
-correlation_matrix = df[numerical_cols_for_selection].corr(method='pearson').abs()
-upper_triangle = correlation_matrix.where(
-    np.triu(np.ones(correlation_matrix.shape), k=1).astype(bool)
-)
-
-correlation_threshold = 0.85
+numerical_cols_for_selection = NUMERICAL_FEATURES.copy()
+correlation_matrix = df_filtered[NUMERICAL_FEATURES].corr(method='pearson').abs()
 high_correlation_pairs = []
 removed_numerical_features = []
 
-for column in upper_triangle.columns:
-    for row_name, corr_value in upper_triangle[column].dropna().items():
-        if corr_value > correlation_threshold:
-            high_correlation_pairs.append((row_name, column, corr_value))
-            removed_numerical_features.append(column)
+for left_index in range(len(numerical_cols_for_selection)):
+    left_column = numerical_cols_for_selection[left_index]
+
+    for right_index in range(left_index + 1, len(numerical_cols_for_selection)):
+        right_column = numerical_cols_for_selection[right_index]
+        correlation_value = correlation_matrix.loc[left_column, right_column]
+
+        if correlation_value > CORRELATION_THRESHOLD:
+            pair_details = {
+                'kept_feature': left_column,
+                'removed_feature': right_column,
+                'correlation': correlation_value,
+            }
+            high_correlation_pairs.append(pair_details)
+
+            if right_column not in removed_numerical_features:
+                removed_numerical_features.append(right_column)
 
 if high_correlation_pairs:
-    print(f"Highly correlated pairs found (threshold > {correlation_threshold}):")
-    for feature_a, feature_b, corr_value in high_correlation_pairs:
-        print(f"- {feature_a} vs {feature_b}: {corr_value:.3f}")
+    print(f"Highly correlated pairs found (threshold > {CORRELATION_THRESHOLD}):")
+    for pair_details in high_correlation_pairs:
+        kept_feature = pair_details['kept_feature']
+        removed_feature = pair_details['removed_feature']
+        correlation_value = pair_details['correlation']
+        print(f"- {kept_feature} vs {removed_feature}: {correlation_value:.3f}")
 else:
     print("No highly correlated numerical features found.")
 
-removed_numerical_features = sorted(set(removed_numerical_features))
-
-# Still in 2f, use the chi-square test to measure whether each categorical feature has a meaningful relationship with the target.
-# Features with weak statistical association can be removed because they contribute little predictive value.
 print("\n--- 2f) Chi-square Test (Categorical Features) ---")
-categorical_features = ['Month', 'VisitorType', 'Weekend']
 chi_square_results = []
 removed_categorical_features = []
 
-target_encoder = LabelEncoder()
-y_encoded = target_encoder.fit_transform(df['Revenue'])
-
-for column in categorical_features:
-    feature_encoder = LabelEncoder()
-    encoded_feature = feature_encoder.fit_transform(df[column]).reshape(-1, 1)
-    chi_square_stat, p_value = chi2(encoded_feature, y_encoded)
-    chi_square_stat = float(chi_square_stat[0])
-    p_value = float(p_value[0])
-
-    chi_square_results.append((column, chi_square_stat, p_value))
+for column in CATEGORICAL_FEATURES_FOR_SELECTION:
+    contingency_table = pd.crosstab(df_filtered[column], df_filtered[TARGET_COLUMN])
+    chi_square_stat, p_value, _, _ = chi2_contingency(contingency_table)
+    result_details = {
+        'feature': column,
+        'chi_square': chi_square_stat,
+        'p_value': p_value,
+    }
+    chi_square_results.append(result_details)
 
     if p_value > 0.05:
         removed_categorical_features.append(column)
 
-for feature, statistic, p_value in chi_square_results:
-    print(f"- {feature}: chi2 = {statistic:.3f}, p-value = {p_value:.6f}")
+for result_details in chi_square_results:
+    feature_name = result_details['feature']
+    chi_square_stat = result_details['chi_square']
+    p_value = result_details['p_value']
+    print(f"- {feature_name}: chi2 = {chi_square_stat:.3f}, p-value = {p_value:.6f}")
 
-selected_features = [
-    column for column in df.columns
-    if column not in removed_numerical_features and column not in removed_categorical_features
-]
+selected_features = []
+for column in df_filtered.columns:
+    if column not in removed_numerical_features and column not in removed_categorical_features:
+        selected_features.append(column)
 
-# 2g) Report exactly which features were removed and include the statistical evidence behind each removal.
-# This keeps the feature-selection result explicit and avoids hiding the important answer behind generic messages.
 print("\n--- 2g) Removed Features and Justification ---")
 if removed_numerical_features:
     print("Removed numerical features:")
     for removed_feature in removed_numerical_features:
-        matching_pair = next(
-            pair for pair in high_correlation_pairs if pair[1] == removed_feature
-        )
-        kept_feature, _, corr_value = matching_pair
+        kept_feature = ""
+        correlation_value = 0
+
+        for pair_details in high_correlation_pairs:
+            if pair_details['removed_feature'] == removed_feature:
+                kept_feature = pair_details['kept_feature']
+                correlation_value = pair_details['correlation']
+                break
+
         print(
             f"- {removed_feature}: removed because it is highly correlated with "
-            f"{kept_feature} (correlation = {corr_value:.3f})"
+            f"{kept_feature} (correlation = {correlation_value:.3f})"
         )
 else:
     print("Removed numerical features: None")
@@ -197,10 +254,15 @@ else:
 if removed_categorical_features:
     print("\nRemoved categorical features:")
     for removed_feature in removed_categorical_features:
-        matching_result = next(
-            result for result in chi_square_results if result[0] == removed_feature
-        )
-        _, chi_square_stat, p_value = matching_result
+        chi_square_stat = 0
+        p_value = 0
+
+        for result_details in chi_square_results:
+            if result_details['feature'] == removed_feature:
+                chi_square_stat = result_details['chi_square']
+                p_value = result_details['p_value']
+                break
+
         print(
             f"- {removed_feature}: removed because chi2 = {chi_square_stat:.3f} "
             f"and p-value = {p_value:.6f} (> 0.05)"
@@ -211,61 +273,66 @@ else:
 print("\nSelected features after feature selection:")
 print(selected_features)
 
-# 2h) Measure class imbalance in the target and then apply simple random undersampling.
-# The goal is to reduce the dominance of the majority class so both classes are represented equally.
-print("\n--- 2h) Class Imbalance Analysis and Sampling ---")
-class_distribution_before = df['Revenue'].value_counts()
-class_percentage_before = df['Revenue'].value_counts(normalize=True) * 100
+# Balance the target classes with stratified sampling.
+print("\n--- 2h) Class Imbalance Analysis and Stratified Sampling ---")
+class_order = [False, True]
+class_distribution_before = pd.Series(index=class_order, dtype='int64')
+for class_value in class_order:
+    class_count = int(len(df_filtered[df_filtered[TARGET_COLUMN] == class_value]))
+    class_distribution_before.loc[class_value] = class_count
+
+class_distribution_before = class_distribution_before.astype(int)
+
+class_percentage_before = class_distribution_before / len(df_filtered) * 100
+imbalance_ratio = class_distribution_before[False] / class_distribution_before[True]
 
 print("Class distribution before sampling:")
 print(class_distribution_before)
 print("\nClass percentage before sampling:")
 print(class_percentage_before.round(2))
+print(f"\nImbalance ratio (False:True): {imbalance_ratio:.2f}:1")
 
-majority_class = df[df['Revenue'] == False]
-minority_class = df[df['Revenue'] == True]
+minority_class_size = int(class_distribution_before.min())
+stratified_samples = []
 
-balanced_majority = resample(
-    majority_class,
-    replace=False,
-    n_samples=len(minority_class),
-    random_state=42,
-)
+for class_value in class_order:
+    class_subset = df_filtered[df_filtered[TARGET_COLUMN] == class_value]
+    sampled_subset = class_subset.sample(n=minority_class_size, random_state=RANDOM_SEED)
+    stratified_samples.append(sampled_subset)
 
-df_sampled = pd.concat([balanced_majority, minority_class]).sample(
+df_sampled = pd.concat(stratified_samples).sample(
     frac=1,
-    random_state=42,
+    random_state=RANDOM_SEED,
 ).reset_index(drop=True)
 
-# 2i) Compare the class distribution before and after sampling to confirm that the balancing step worked.
+print("\nSampling method used: Stratified sampling by Revenue class.")
+print(f"Rows sampled from each class: {minority_class_size}")
+
 print("\n--- 2i) Class Distribution Before vs After Sampling ---")
-class_distribution_after = df_sampled['Revenue'].value_counts()
-class_percentage_after = df_sampled['Revenue'].value_counts(normalize=True) * 100
+class_distribution_after = pd.Series(index=class_order, dtype='int64')
+for class_value in class_order:
+    class_count = int(len(df_sampled[df_sampled[TARGET_COLUMN] == class_value]))
+    class_distribution_after.loc[class_value] = class_count
+
+class_distribution_after = class_distribution_after.astype(int)
+
+class_percentage_after = class_distribution_after / len(df_sampled) * 100
 
 print("Before sampling:")
 print(class_distribution_before)
-print("\nAfter simple random undersampling:")
+print("\nAfter stratified sampling:")
 print(class_distribution_after)
 
 print("\nPercentage before sampling:")
 print(class_percentage_before.round(2))
 print("\nPercentage after sampling:")
 print(class_percentage_after.round(2))
-
-
-
-
-
-
-# Part 3: Data Visualization
 print("\n=== Part 3: Data Visualization ===")
 
-# Create an output folder for the generated charts so they can be reviewed after the script finishes.
+# Save all charts to one folder.
 visualization_dir = "visualizations"
 os.makedirs(visualization_dir, exist_ok=True)
 
-# 3a) Histogram for a relevant numerical feature
-# PageValues is a useful feature because it reflects how much value a session generated before purchase or exit.
 print("\n--- 3a) Histogram: PageValues ---")
 plt.figure(figsize=(8, 5))
 plt.hist(df['PageValues'], bins=30, color='steelblue', edgecolor='black')
@@ -283,8 +350,6 @@ print(
     "have low PageValues while a smaller number of sessions have very high values."
 )
 
-# 3b) Boxplot for a significant feature
-# ProductRelated_Duration is significant because time spent on product pages is closely tied to shopping intent.
 print("\n--- 3b) Boxplot: ProductRelated_Duration ---")
 plt.figure(figsize=(8, 5))
 plt.boxplot(df['ProductRelated_Duration'], vert=True, patch_artist=True, boxprops=dict(facecolor='lightgreen'))
@@ -301,8 +366,6 @@ print(
     "because shopping-session duration varies strongly between casual visitors and engaged buyers."
 )
 
-# 3c) Scatterplot between two meaningful features
-# ProductRelated and ProductRelated_Duration are paired behavioral features that describe browsing depth and time spent.
 print("\n--- 3c) Scatterplot: ProductRelated vs ProductRelated_Duration ---")
 plt.figure(figsize=(8, 5))
 plt.scatter(df['ProductRelated'], df['ProductRelated_Duration'], alpha=0.4, color='darkorange')
@@ -320,10 +383,8 @@ print(
     "product-related pages increases, the total time spent on those pages also tends to increase."
 )
 
-# 3d) Correlation heatmap for the numerical features
-# A heatmap summarizes the strongest linear relationships and supports the feature-selection results from Part 2.
 print("\n--- 3d) Correlation Heatmap ---")
-heatmap_corr = df[numerical_cols_for_selection].corr(method='pearson')
+heatmap_corr = df_filtered[numerical_cols_for_selection].corr(method='pearson')
 plt.figure(figsize=(12, 8))
 heatmap = plt.imshow(heatmap_corr, cmap='coolwarm', aspect='auto', vmin=-1, vmax=1)
 plt.colorbar(heatmap, fraction=0.046, pad=0.04)
@@ -345,25 +406,22 @@ print(
     "which indicates that sessions with early bounces often also end with high exit behavior."
 )
 
-##################################################
-# Part 4: Insight Discovery
-##################################################
-
 print("\n=== Part 4: Insight Discovery ===")
 
-# 4a) Sessions that ended in a purchase generated far higher PageValues than non-purchasing sessions.
-# This is the strongest target-related insight in the dataset because the average PageValues for
-# Revenue=True sessions is 27.26 versus only 2.00 for Revenue=False sessions, and the difference
-# is statistically significant with a Welch t-test p-value of 1.88e-173. The result suggests that
-# PageValues captures meaningful purchase intent rather than random browsing noise. In practical
-# terms, users who accumulate page value during the session are much more likely to convert.
+insight_df = df_filtered
+
+# PageValues is much higher in purchasing sessions, so it is the clearest target-related signal.
 print("\n--- 4a) Statistically Supported Insight About the Target ---")
-pagevalues_true = df[df['Revenue'] == True]['PageValues']
-pagevalues_false = df[df['Revenue'] == False]['PageValues']
+pagevalues_true = insight_df[insight_df[TARGET_COLUMN] == True]['PageValues']
+pagevalues_false = insight_df[insight_df[TARGET_COLUMN] == False]['PageValues']
 pagevalues_ttest = ttest_ind(pagevalues_true, pagevalues_false, equal_var=False)
 
+print(f"Sessions with Revenue = True: {len(pagevalues_true)}")
+print(f"Sessions with Revenue = False: {len(pagevalues_false)}")
 print(f"Average PageValues when Revenue = True: {pagevalues_true.mean():.2f}")
 print(f"Average PageValues when Revenue = False: {pagevalues_false.mean():.2f}")
+print(f"Median PageValues when Revenue = True: {pagevalues_true.median():.2f}")
+print(f"Median PageValues when Revenue = False: {pagevalues_false.median():.2f}")
 print(f"Welch t-test p-value: {pagevalues_ttest.pvalue:.3e}")
 print(
     "Insight: Purchasing sessions have dramatically higher PageValues, so PageValues is strongly "
@@ -385,94 +443,114 @@ plt.savefig(insight_plot_path)
 plt.close()
 print(f"Supporting visualization saved to: {insight_plot_path}")
 
-# 4b) The interaction between VisitorType and Month reveals that new visitors convert especially well in November.
-# The highest conversion segment is New_Visitor in November with a conversion rate of 30.55%, while the
-# overall conversion rate in the cleaned dataset is only 15.63%. This matters because the effect is not
-# explained by month alone or visitor type alone; it appears when both features are considered together.
-# The pattern suggests that seasonal shopping periods attract high-intent first-time visitors.
+# Check interaction patterns only on segments that are large enough to be trustworthy.
 print("\n--- 4b) Interaction-Based Insight ---")
-visitor_month_conversion = (
-    df.groupby(['VisitorType', 'Month'])['Revenue']
-    .mean()
-    .sort_values(ascending=False)
+visitor_month_summary = insight_df.groupby(['VisitorType', 'Month'])[TARGET_COLUMN].agg(
+    ['mean', 'count', 'sum']
 )
-top_segment = visitor_month_conversion.index[0]
-top_conversion_rate = visitor_month_conversion.iloc[0]
-overall_conversion_rate = df['Revenue'].mean()
+visitor_month_summary = visitor_month_summary.reset_index()
+visitor_month_summary = visitor_month_summary.sort_values(
+    ['mean', 'count'],
+    ascending=[False, False],
+)
+meaningful_segments = visitor_month_summary[visitor_month_summary['count'] >= MINIMUM_SEGMENT_SIZE]
+top_segment_row = meaningful_segments.iloc[0]
+top_visitor_type = top_segment_row['VisitorType']
+top_month = top_segment_row['Month']
+top_conversion_rate = float(top_segment_row['mean'])
+top_segment_count = int(top_segment_row['count'])
+top_segment_conversions = int(top_segment_row['sum'])
+overall_conversion_rate = insight_df[TARGET_COLUMN].mean()
+visitor_type_rate = insight_df[insight_df['VisitorType'] == top_visitor_type][TARGET_COLUMN].mean()
+month_rate = insight_df[insight_df['Month'] == top_month][TARGET_COLUMN].mean()
+top_segment_mask = (
+    (insight_df['VisitorType'] == top_visitor_type) &
+    (insight_df['Month'] == top_month)
+)
+top_segment_table = pd.crosstab(top_segment_mask, insight_df[TARGET_COLUMN])
+top_segment_chi2 = chi2_contingency(top_segment_table)
 
 print(
-    f"Top interaction segment: VisitorType = {top_segment[0]}, Month = {top_segment[1]}"
+    f"Top interaction segment: VisitorType = {top_visitor_type}, Month = {top_month}"
 )
-print(f"Conversion rate for this segment: {top_conversion_rate:.2%}")
+print(f"Segment sessions: {top_segment_count}")
+print(f"Segment conversions: {top_segment_conversions}")
+print(f"Segment conversion rate: {top_conversion_rate:.2%}")
+print(f"{top_visitor_type} overall conversion rate: {visitor_type_rate:.2%}")
+print(f"{top_month} overall conversion rate: {month_rate:.2%}")
 print(f"Overall conversion rate: {overall_conversion_rate:.2%}")
+print(f"Segment vs rest chi-square p-value: {top_segment_chi2[1]:.3e}")
 print(
-    "Insight: First-time visitors in November convert at a much higher rate than the dataset average, "
-    "which shows a meaningful interaction between seasonality and visitor type."
+    "Insight: New visitors in November convert better than either the visitor-type baseline or the "
+    "month baseline, which makes this a meaningful interaction pattern."
 )
 
-# 4c) A counter-intuitive result is that SpecialDay is lower for purchasing sessions than for non-purchasing sessions.
-# One might expect buying behavior to rise near special shopping days, yet the average SpecialDay score is
-# 0.023 for Revenue=True sessions and 0.069 for Revenue=False sessions. The Welch t-test p-value is 1.47e-38,
-# so the difference is statistically strong. This suggests that regular browsing behavior outside special-day
-# periods may produce better conversions than sessions clustered near special-event dates.
+# SpecialDay is lower in purchasing sessions, which makes it an unexpected result.
 print("\n--- 4c) Counter-Intuitive Finding ---")
-specialday_true = df[df['Revenue'] == True]['SpecialDay']
-specialday_false = df[df['Revenue'] == False]['SpecialDay']
+specialday_true = insight_df[insight_df[TARGET_COLUMN] == True]['SpecialDay']
+specialday_false = insight_df[insight_df[TARGET_COLUMN] == False]['SpecialDay']
 specialday_ttest = ttest_ind(specialday_true, specialday_false, equal_var=False)
 
 print(f"Average SpecialDay when Revenue = True: {specialday_true.mean():.4f}")
 print(f"Average SpecialDay when Revenue = False: {specialday_false.mean():.4f}")
+print(f"Share of Revenue = True sessions with SpecialDay > 0: {specialday_true.gt(0).mean():.2%}")
+print(f"Share of Revenue = False sessions with SpecialDay > 0: {specialday_false.gt(0).mean():.2%}")
 print(f"Welch t-test p-value: {specialday_ttest.pvalue:.3e}")
 print(
     "Insight: Purchases are less associated with SpecialDay periods than non-purchases, which is an "
     "unexpected pattern in this dataset."
 )
 
-# 4d) A practical business recommendation is to prioritize campaigns that raise PageValues and target high-intent seasonal segments.
-# The data shows that PageValues is much higher in purchasing sessions, and New_Visitor traffic in November
-# converts at 30.55%, nearly double the overall conversion rate of 15.63%. A business should therefore
-# emphasize stronger product-page value, clearer offers, and acquisition campaigns for new visitors during
-# high-conversion months. This recommendation is evidence-based because it combines target strength and
-# feature interaction into one actionable strategy.
+# Turn the strongest patterns into one practical recommendation.
 print("\n--- 4d) Business Recommendation ---")
-visitortype_revenue_table = pd.crosstab(df['VisitorType'], df['Revenue'])
-visitortype_chi2 = chi2_contingency(visitortype_revenue_table)
-
-print(f"New_Visitor conversion rate in November: {top_conversion_rate:.2%}")
+print(f"Average PageValues when Revenue = True: {pagevalues_true.mean():.2f}")
+print(f"Average PageValues when Revenue = False: {pagevalues_false.mean():.2f}")
+print(f"{top_visitor_type} conversion rate in {top_month}: {top_conversion_rate:.2%}")
 print(f"Overall conversion rate: {overall_conversion_rate:.2%}")
-print(f"VisitorType vs Revenue chi-square p-value: {visitortype_chi2[1]:.3e}")
+print(f"Segment vs rest chi-square p-value: {top_segment_chi2[1]:.3e}")
 print(
-    "Recommendation: Focus acquisition and remarketing efforts on new visitors during November-like "
-    "high-conversion periods, and optimize product pages to increase PageValues before checkout."
+    "Recommendation: Improve product-page clarity, offers, and checkout cues that are associated with "
+    "higher PageValues, and prioritize acquisition campaigns for new visitors during November-like "
+    "high-conversion periods."
 )
-
-##################################################
-# Part 5: Feature Engineering
-##################################################
 
 print("\n=== Part 5: Feature Engineering ===")
 
-# 5a) Create a new behavioral feature that measures the average time spent per product-related page.
-# This summarizes browsing depth and browsing time into one variable, which can be more informative
-# than using only raw counts or only total duration.
+# Measure average time spent per product page.
 print("\n--- 5a) New Feature Creation ---")
-df_filtered['Avg_Product_Time'] = (
+df_filtered[ENGINEERED_FEATURE] = (
     df_filtered['ProductRelated_Duration'] / df_filtered['ProductRelated']
 )
+df_prepared[ENGINEERED_FEATURE] = df_filtered[ENGINEERED_FEATURE]
 
-print("New feature created: Avg_Product_Time")
+engineered_scaler = StandardScaler()
+df_encoded[ENGINEERED_FEATURE] = engineered_scaler.fit_transform(
+    df_prepared[[ENGINEERED_FEATURE]]
+)
+df_sampled[ENGINEERED_FEATURE] = (
+    df_sampled['ProductRelated_Duration'] / df_sampled['ProductRelated']
+)
+
+if ENGINEERED_FEATURE not in selected_features:
+    selected_features.append(ENGINEERED_FEATURE)
+
+print(f"New feature created: {ENGINEERED_FEATURE}")
 print("Definition: ProductRelated_Duration / ProductRelated")
-print("First 10 values:")
-print(df_filtered['Avg_Product_Time'].head(10))
+print("Added to datasets: df_filtered, df_prepared, df_encoded, and df_sampled")
 
-# 5b) Explain why the engineered feature may help future classification models.
-# Users may open a similar number of product pages but behave very differently in terms of time spent.
-# This feature captures engagement quality, which can improve a classifier's ability to separate casual
-# browsing from genuine purchase intent.
+# This feature adds depth of engagement, not just visit count.
 print("\n--- 5b) Why This Feature May Improve Classification ---")
+avg_time_true = df_filtered[df_filtered[TARGET_COLUMN] == True][ENGINEERED_FEATURE]
+avg_time_false = df_filtered[df_filtered[TARGET_COLUMN] == False][ENGINEERED_FEATURE]
+avg_time_ttest = ttest_ind(avg_time_true, avg_time_false, equal_var=False)
+
+print(f"Average {ENGINEERED_FEATURE} when Revenue = True: {avg_time_true.mean():.2f}")
+print(f"Average {ENGINEERED_FEATURE} when Revenue = False: {avg_time_false.mean():.2f}")
+print(f"Median {ENGINEERED_FEATURE} when Revenue = True: {avg_time_true.median():.2f}")
+print(f"Median {ENGINEERED_FEATURE} when Revenue = False: {avg_time_false.median():.2f}")
+print(f"Welch t-test p-value: {avg_time_ttest.pvalue:.3e}")
 print(
-    "Avg_Product_Time may improve future classification models because it captures how much time a user "
-    "spends on each product page on average. Two visitors can view the same number of product pages, "
-    "but the visitor who spends longer on each page may show stronger purchase intent. This makes the "
-    "feature useful for distinguishing shallow browsing from engaged shopping behavior."
+    "Avg_Product_Time may improve future classification models because it captures engagement quality per "
+    "product page rather than only total browsing volume. That helps distinguish shallow browsing from "
+    "more deliberate shopping behavior."
 )
