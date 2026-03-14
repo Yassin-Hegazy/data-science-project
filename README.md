@@ -65,10 +65,10 @@ Below is the practical meaning of each feature.
 | `Informational` | Number of informational pages visited | Numerical |
 | `Informational_Duration` | Time spent on informational pages | Numerical |
 | `ProductRelated` | Number of product-related pages visited | Numerical |
-| `ProductRelated_Duration` | Time spent on product-related pages | Numerical |
+| `ProductRelated_Duration` | Time spent on product-related pages, stored in seconds in the dataset | Numerical |
 | `BounceRates` | Bounce-rate related session signal | Numerical |
 | `ExitRates` | Exit-rate related session signal | Numerical |
-| `PageValues` | Estimated value accumulated before purchase or exit | Numerical |
+| `PageValues` | Estimated page-value score from the session before purchase or exit; it is not the same as the final revenue amount | Numerical |
 | `SpecialDay` | Closeness of the session to a special day | Numerical |
 | `Month` | Month of the visit | Categorical |
 | `OperatingSystems` | Visitor operating system category | Categorical |
@@ -213,10 +213,12 @@ numerical_features = [
     'SpecialDay',
 ]
 
-numerical_stats = df[numerical_features].agg(['mean', 'median', 'std']).T
-numerical_percentiles = df[numerical_features].quantile([0.20, 0.50, 0.75]).T
-numerical_percentiles.columns = ['20%', '50%', '75%']
-stats = numerical_stats.join(numerical_percentiles)
+mean_values = df[numerical_features].mean()
+median_values = df[numerical_features].median()
+std_values = df[numerical_features].std()
+percentile_20 = df[numerical_features].quantile(0.20)
+percentile_50 = df[numerical_features].quantile(0.50)
+percentile_75 = df[numerical_features].quantile(0.75)
 ```
 
 Why it exists:
@@ -450,6 +452,7 @@ This section prints a human-readable explanation for removed features rather tha
 
 That is good practice because it makes the logic auditable.
 In this project, the removed features are `ProductRelated_Duration`, `ExitRates`, and `Region`.
+The script now also drops those removed columns from `df_prepared` and `df_encoded`, while keeping `Revenue` separate as the target instead of treating it like an input feature.
 
 #### 2h. Handle class imbalance
 
@@ -458,7 +461,8 @@ Because `Revenue=False` is much more common than `Revenue=True`, the script uses
 ```python
 minority_class_size = int(class_distribution_before.min())
 
-for _, class_subset in df_filtered.groupby('Revenue'):
+for class_value in [False, True]:
+    class_subset = df_filtered[df_filtered['Revenue'] == class_value]
     stratified_samples.append(class_subset.sample(n=minority_class_size, random_state=42))
 ```
 
@@ -501,6 +505,8 @@ Why this chart:
 
 Interpretation:
 
+- the x-axis shows `PageValues`, which is an estimated page-value score from the session
+- the y-axis shows the number of sessions in each bin
 - most sessions have low page value
 - a smaller number of sessions have very high page value
 
@@ -513,6 +519,7 @@ Why this chart:
 
 Interpretation:
 
+- the values are displayed in minutes for readability, even though the dataset stores them in seconds
 - there are many high-value outliers
 
 #### 3c. Scatterplot of `ProductRelated` vs `ProductRelated_Duration`
@@ -524,6 +531,7 @@ Why this chart:
 
 Interpretation:
 
+- the y-axis is shown in minutes for readability
 - there is a positive relationship
 
 #### 3d. Correlation heatmap
@@ -751,39 +759,48 @@ CATEGORICAL_FEATURES_FOR_SELECTION = MULTI_CATEGORY_FEATURES + ['Weekend']
 
 This is Python's built-in list type.
 
-### List comprehension
+### Building a list with a loop
 
 Example:
 
 ```python
-selected_features = [
-    column for column in df_filtered.columns
-    if column not in removed_numerical_features and column not in removed_categorical_features
-]
+selected_predictor_features = []
+for column in df_filtered.columns:
+    if column == TARGET_COLUMN:
+        continue
+
+    if column not in removed_numerical_features and column not in removed_categorical_features:
+        selected_predictor_features.append(column)
 ```
 
-This is a compact way to build a list.
+This builds a list one step at a time.
 
 Equivalent mental model:
 
 - loop over all columns
+- skip the target column
 - keep only the columns that satisfy the condition
 - store the kept ones in a new list
 
-### Tuples
+### Dictionaries
 
 Example:
 
 ```python
-chi_square_results.append((column, chi_square_stat, p_value))
+result_details = {
+    'feature': column,
+    'chi_square': chi_square_stat,
+    'p_value': p_value,
+}
+chi_square_results.append(result_details)
 ```
 
-This adds a tuple containing three values.
+This adds one dictionary containing named values.
 
-Think of a tuple as:
+Think of a dictionary as:
 
-- a small fixed-size group of values
-- similar to a lightweight record without a named class
+- a small group of named values
+- easier to read than remembering positions like item 0, item 1, and item 2
 
 ### Indentation matters
 

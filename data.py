@@ -12,6 +12,7 @@ FILTER_COLUMN = 'ProductRelated'
 CORRELATION_THRESHOLD = 0.85
 MINIMUM_SEGMENT_SIZE = 100
 RANDOM_SEED = 42
+SECONDS_PER_MINUTE = 60
 NUMERICAL_FEATURES = [
     'Administrative',
     'Administrative_Duration',
@@ -226,10 +227,13 @@ for result_details in chi_square_results:
     p_value = result_details['p_value']
     print(f"- {feature_name}: chi2 = {chi_square_stat:.3f}, p-value = {p_value:.6f}")
 
-selected_features = []
+selected_predictor_features = []
 for column in df_filtered.columns:
+    if column == TARGET_COLUMN:
+        continue
+
     if column not in removed_numerical_features and column not in removed_categorical_features:
-        selected_features.append(column)
+        selected_predictor_features.append(column)
 
 print("\n--- 2g) Removed Features and Justification ---")
 if removed_numerical_features:
@@ -270,8 +274,28 @@ if removed_categorical_features:
 else:
     print("\nRemoved categorical features: None")
 
-print("\nSelected features after feature selection:")
-print(selected_features)
+print("\nSelected predictor features after feature selection:")
+print(selected_predictor_features)
+print(f"Target column kept separately: {TARGET_COLUMN}")
+
+columns_to_drop_from_prepared = removed_numerical_features + removed_categorical_features
+df_prepared = df_prepared.drop(columns=columns_to_drop_from_prepared, errors='ignore')
+
+encoded_columns_to_drop = removed_numerical_features.copy()
+for removed_feature in removed_categorical_features:
+    if removed_feature in df_encoded.columns:
+        encoded_columns_to_drop.append(removed_feature)
+
+    encoded_prefix = f"{removed_feature}_"
+    for column in df_encoded.columns:
+        if column.startswith(encoded_prefix):
+            encoded_columns_to_drop.append(column)
+
+encoded_columns_to_drop = list(dict.fromkeys(encoded_columns_to_drop))
+df_encoded = df_encoded.drop(columns=encoded_columns_to_drop, errors='ignore')
+
+print(f"Prepared dataset shape after feature selection: {df_prepared.shape}")
+print(f"Encoded dataset shape after feature selection: {df_encoded.shape}")
 
 # Balance the target classes with stratified sampling.
 print("\n--- 2h) Class Imbalance Analysis and Stratified Sampling ---")
@@ -332,12 +356,22 @@ print("\n=== Part 3: Data Visualization ===")
 # Save all charts to one folder.
 visualization_dir = "visualizations"
 os.makedirs(visualization_dir, exist_ok=True)
+visualization_df = df_filtered
+pagevalues_for_plot = visualization_df['PageValues']
+product_duration_minutes = (
+    visualization_df['ProductRelated_Duration'] / SECONDS_PER_MINUTE
+)
 
 print("\n--- 3a) Histogram: PageValues ---")
 plt.figure(figsize=(8, 5))
-plt.hist(df['PageValues'], bins=30, color='steelblue', edgecolor='black')
+plt.hist(
+    pagevalues_for_plot,
+    bins=30,
+    color='steelblue',
+    edgecolor='black',
+)
 plt.title('Histogram of PageValues')
-plt.xlabel('PageValues')
+plt.xlabel('PageValues (estimated page-value score)')
 plt.ylabel('Frequency')
 histogram_path = os.path.join(visualization_dir, '3a_histogram_pagevalues.png')
 plt.tight_layout()
@@ -346,15 +380,22 @@ plt.close()
 
 print(f"Histogram saved to: {histogram_path}")
 print(
-    "Interpretation: The distribution is heavily right-skewed, which means most sessions "
-    "have low PageValues while a smaller number of sessions have very high values."
+    "Interpretation: The x-axis shows PageValues, which is an estimated page-value score "
+    "from the session, and the y-axis shows the number of sessions in each range. "
+    "The distribution is heavily right-skewed, which means most sessions have low "
+    "PageValues while a smaller number of sessions have much higher values."
 )
 
 print("\n--- 3b) Boxplot: ProductRelated_Duration ---")
 plt.figure(figsize=(8, 5))
-plt.boxplot(df['ProductRelated_Duration'], vert=True, patch_artist=True, boxprops=dict(facecolor='lightgreen'))
-plt.title('Boxplot of ProductRelated_Duration')
-plt.ylabel('ProductRelated_Duration')
+plt.boxplot(
+    product_duration_minutes,
+    vert=True,
+    patch_artist=True,
+    boxprops=dict(facecolor='lightgreen'),
+)
+plt.title('Boxplot of ProductRelated_Duration (Minutes)')
+plt.ylabel('Minutes')
 boxplot_path = os.path.join(visualization_dir, '3b_boxplot_productrelated_duration.png')
 plt.tight_layout()
 plt.savefig(boxplot_path)
@@ -362,16 +403,22 @@ plt.close()
 
 print(f"Boxplot saved to: {boxplot_path}")
 print(
-    "Interpretation: This feature shows many high-value outliers, which justifies its choice "
-    "because shopping-session duration varies strongly between casual visitors and engaged buyers."
+    "Interpretation: The y-axis is shown in minutes for readability. This feature still "
+    "shows many high-value outliers, which tells us that shopping-session duration varies "
+    "strongly between casual visitors and highly engaged buyers."
 )
 
 print("\n--- 3c) Scatterplot: ProductRelated vs ProductRelated_Duration ---")
 plt.figure(figsize=(8, 5))
-plt.scatter(df['ProductRelated'], df['ProductRelated_Duration'], alpha=0.4, color='darkorange')
-plt.title('ProductRelated vs ProductRelated_Duration')
+plt.scatter(
+    visualization_df['ProductRelated'],
+    product_duration_minutes,
+    alpha=0.4,
+    color='darkorange',
+)
+plt.title('ProductRelated vs ProductRelated_Duration (Minutes)')
 plt.xlabel('ProductRelated')
-plt.ylabel('ProductRelated_Duration')
+plt.ylabel('ProductRelated_Duration (minutes)')
 scatterplot_path = os.path.join(visualization_dir, '3c_scatter_productrelated_vs_duration.png')
 plt.tight_layout()
 plt.savefig(scatterplot_path)
@@ -380,7 +427,8 @@ plt.close()
 print(f"Scatterplot saved to: {scatterplot_path}")
 print(
     "Interpretation: The scatterplot shows a clear positive relationship. As the number of "
-    "product-related pages increases, the total time spent on those pages also tends to increase."
+    "product-related pages increases, the total time spent on those pages also tends to "
+    "increase. The y-axis is shown in minutes."
 )
 
 print("\n--- 3d) Correlation Heatmap ---")
@@ -531,8 +579,8 @@ df_sampled[ENGINEERED_FEATURE] = (
     df_sampled['ProductRelated_Duration'] / df_sampled['ProductRelated']
 )
 
-if ENGINEERED_FEATURE not in selected_features:
-    selected_features.append(ENGINEERED_FEATURE)
+if ENGINEERED_FEATURE not in selected_predictor_features:
+    selected_predictor_features.append(ENGINEERED_FEATURE)
 
 print(f"New feature created: {ENGINEERED_FEATURE}")
 print("Definition: ProductRelated_Duration / ProductRelated")
